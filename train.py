@@ -15,7 +15,7 @@ path_to_core = "/home/wis/training/train_cls_1"
 data_dir = "dataset"
 batch_print_freq = 10
 num_epochs = 5000
-batch_size = 64
+batch_size = 16
 learning_rate = 2e-5
 feature_cache_dir = Path(f"{path_to_core}/feature_cache")
 
@@ -324,8 +324,8 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
     # Training loop
     best_val_acc = 0
     for epoch in range(num_epochs):
-        # Regenerate training features every 200 epochs
-        if epoch % 200 == 0:
+        # Regenerate training features every 100 epochs
+        if (epoch + 1) % 100 == 0:
             print(f"Epoch {epoch}: Regenerating training features...")
             train_features, train_labels = extract_and_cache_features(
                 train_dataset, vae, batch_size=batch_size, device=device, force_regenerate=True, split='train'
