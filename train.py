@@ -14,8 +14,8 @@ import numpy as np
 path_to_core = "/home/wis/training/train_cls_1"
 data_dir = "dataset"
 batch_print_freq = 10
-num_epochs = 5000
-batch_size = 24
+num_epochs = 20000
+batch_size = 36
 learning_rate = 2e-5
 feature_cache_dir = Path(f"{path_to_core}/feature_cache")
 
@@ -91,11 +91,11 @@ class TiledFeatureClassifier(nn.Module):
         n_additional = self.feature_dim // 2
         self.learned_features = nn.Sequential(
             nn.Linear(self.feature_dim, n_additional),
-            nn.Dropout(0.25),
+            nn.Dropout(0.35),
             nn.GELU(),
             nn.LayerNorm(n_additional),
             nn.Linear(n_additional, n_additional),
-            nn.Dropout(0.25),
+            nn.Dropout(0.35),
             nn.GELU(),
             nn.LayerNorm(n_additional)
         )
@@ -328,8 +328,8 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
     # Training loop
     best_val_acc = 0
     for epoch in range(num_epochs):
-        # Regenerate training features every 100 epochs
-        if (epoch) % 100 == 0:
+        # Regenerate training features every 75 epochs
+        if (epoch) % 75 == 0:
             print(f"Epoch {epoch}: Regenerating training features...")
             train_features, train_labels = extract_and_cache_features(
                 train_dataset, vae, batch_size=batch_size, device=device, force_regenerate=True, split='train'
