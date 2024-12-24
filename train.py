@@ -176,17 +176,20 @@ def tile_image(images, tile_size=(64, 64), max_tiles=40):
     
     return tiles
 
-def extract_and_cache_features(dataset, vae, batch_size=32, device='cuda'):
+def extract_and_cache_features(dataset, vae, batch_size=32, device='cuda', force_regenerate=False, split='train'):
     """Extract VAE features and cache them to disk"""
     feature_cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = feature_cache_dir / "features.pt"
+    cache_file = feature_cache_dir / f"features_{split}.pt"
     
-    if cache_file.exists():
-        print("Loading cached features...")
+    if cache_file.exists() and not force_regenerate:
+        print(f"Loading cached {split} features...")
         cache_data = torch.load(cache_file)
         return cache_data['features'], cache_data['labels']
     
-    print("Extracting features...")
+    if cache_file.exists():
+        cache_file.unlink()  # Delete existing cache file
+    
+    print(f"Extracting {split} features...")
     dataloader = DataLoader(
         dataset, 
         batch_size=batch_size, 
@@ -272,31 +275,35 @@ def custom_collate(batch):
 def train_model(data_dir, num_epochs, batch_size, learning_rate):
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    weights_dir = Path(f"{path_to_core}/weights")
+    weights_dir.mkdir(parents=True, exist_ok=True)
     
     # Initialize wandb
     wandb.init(project="floor-plan-classification", name="efficient_vae_attention")
 
-    # Create dataset and extract features
-    dataset = ImageDataset(data_dir)
+    # Create dataset and load VAE
+    full_dataset = ImageDataset(data_dir)
+    
+    # Create train-val split indices once
+    dataset_size = len(full_dataset)
+    train_size = int(0.8 * dataset_size)
+    val_size = dataset_size - train_size
+    train_indices, val_indices = torch.utils.data.random_split(
+        range(dataset_size), 
+        [train_size, val_size]
+    )
+
+    # Create train and val datasets
+    train_dataset = torch.utils.data.Subset(full_dataset, train_indices.indices)
+    val_dataset = torch.utils.data.Subset(full_dataset, val_indices.indices)
+    
     vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix")
     
-    # Extract and cache features
-    features, labels = extract_and_cache_features(dataset, vae, batch_size=batch_size, device=device)
-    feature_dataset = FeatureDataset(features, labels)
-    
-    # Split dataset
-    train_size = int(0.8 * len(feature_dataset))
-    val_size = len(feature_dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(feature_dataset, [train_size, val_size])
-
-    # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=4)
-
     # Initialize model
     feature_dim = vae.config.latent_channels * 64
-    num_classes = len(dataset.classes)
-    model = TiledFeatureClassifier(feature_dim, num_classes, class_names=dataset.classes).to(device)
+    num_classes = len(full_dataset.classes)
+    model = TiledFeatureClassifier(feature_dim, num_classes, class_names=full_dataset.classes).to(device)
     
     criterion = FocalLoss(gamma=2.0)
     optimizer = torch.optim.AdamW(
@@ -307,13 +314,31 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
         eps=1e-8,
     )
 
+    # Extract initial validation features (these won't change)
+    val_features, val_labels = extract_and_cache_features(
+        val_dataset, vae, batch_size=batch_size, device=device, force_regenerate=True, split='val'
+    )
+    val_feature_dataset = FeatureDataset(val_features, val_labels, training=False)
+    val_loader = DataLoader(val_feature_dataset, batch_size=batch_size, num_workers=4)
+
     # Training loop
+    best_val_acc = 0
     for epoch in range(num_epochs):
+        # Regenerate training features every 200 epochs
+        if epoch % 200 == 0:
+            print(f"Epoch {epoch}: Regenerating training features...")
+            train_features, train_labels = extract_and_cache_features(
+                train_dataset, vae, batch_size=batch_size, device=device, force_regenerate=True, split='train'
+            )
+            train_feature_dataset = FeatureDataset(train_features, train_labels, training=True)
+            train_loader = DataLoader(train_feature_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+
+        # Training phase
         model.train()
         train_loss = 0
-        correct = 0
-        total = 0
-
+        train_correct = 0
+        train_total = 0
+        
         for batch_idx, (features, targets) in enumerate(tqdm(train_loader)):
             features, targets = features.to(device), targets.to(device)
             
@@ -326,18 +351,18 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
             optimizer.step()
 
             _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
+            train_total += targets.size(0)
+            train_correct += predicted.eq(targets).sum().item()
             train_loss += loss.item()
 
             if (batch_idx + 1) % batch_print_freq == 0:
                 wandb.log({
                     "train/step": epoch * len(train_loader) + batch_idx,
                     "train/batch_loss": loss.item(),
-                    "train/batch_accuracy": 100. * correct / total,
+                    "train/batch_accuracy": 100. * train_correct / train_total,
                 })
 
-        # Validation
+        # Validation phase
         model.eval()
         val_loss = 0
         val_correct = 0
@@ -354,25 +379,49 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
                 val_correct += predicted.eq(targets).sum().item()
                 val_loss += loss.item()
 
+        # Calculate epoch metrics
+        train_epoch_loss = train_loss / len(train_loader)
+        train_epoch_acc = 100. * train_correct / train_total
+        val_epoch_loss = val_loss / len(val_loader)
+        val_epoch_acc = 100. * val_correct / val_total
+
         # Log epoch metrics
         wandb.log({
             "epoch": epoch,
-            "train/epoch_loss": train_loss / len(train_loader),
-            "train/epoch_accuracy": 100. * correct / total,
-            "val/epoch_loss": val_loss / len(val_loader),
-            "val/epoch_accuracy": 100. * val_correct / val_total
+            "train/epoch_loss": train_epoch_loss,
+            "train/epoch_accuracy": train_epoch_acc,
+            "val/epoch_loss": val_epoch_loss,
+            "val/epoch_accuracy": val_epoch_acc
         })
 
-        # Save checkpoint
+        # Save checkpoint if validation accuracy improves
+        if val_epoch_acc > best_val_acc:
+            best_val_acc = val_epoch_acc
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_accuracy': val_epoch_acc,
+                'class_names': model.class_names,
+                'num_classes': num_classes,
+                'feature_dim': feature_dim,
+            }, f"{weights_dir}/efficient_vae_attention_best.pth")
+
+        # Save periodic checkpoint
         if (epoch + 1) % 100 == 0:
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'val_accuracy': val_epoch_acc,
                 'class_names': model.class_names,
                 'num_classes': num_classes,
                 'feature_dim': feature_dim,
-            }, f"{path_to_core}/weights/efficient_vae_attention_epoch_{epoch+1}.pth")
+            }, f"{weights_dir}/efficient_vae_attention_epoch_{epoch+1}.pth")
+
+        print(f"Epoch {epoch + 1}/{num_epochs}")
+        print(f"Train Loss: {train_epoch_loss:.4f}, Train Acc: {train_epoch_acc:.2f}%")
+        print(f"Val Loss: {val_epoch_loss:.4f}, Val Acc: {val_epoch_acc:.2f}%")
 
 if __name__ == "__main__":
     train_model(data_dir, num_epochs, batch_size, learning_rate)
