@@ -187,7 +187,12 @@ def extract_and_cache_features(dataset, vae, batch_size=32, device='cuda'):
         return cache_data['features'], cache_data['labels']
     
     print("Extracting features...")
-    dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=4)
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        num_workers=4,
+        collate_fn=custom_collate
+    )
     all_features = []
     all_labels = []
     
@@ -200,10 +205,17 @@ def extract_and_cache_features(dataset, vae, batch_size=32, device='cuda'):
     
     with torch.no_grad():
         for images, labels in tqdm(dataloader):
-            images = images.to(device)
-            images = transform(images)
+            # Stack images into a batch with padding
+            max_h = max(img.shape[1] for img in images)
+            max_w = max(img.shape[2] for img in images)
             
-            tiles = tile_image(images)
+            batch_images = torch.zeros(len(images), 3, max_h, max_w, device=device)
+            for i, img in enumerate(images):
+                batch_images[i, :, :img.shape[1], :img.shape[2]] = img
+            
+            batch_images = transform(batch_images)
+            
+            tiles = tile_image(batch_images)
             B, N = tiles.shape[:2]
             tiles = tiles.view(B * N, *tiles.shape[2:])
             
@@ -241,6 +253,21 @@ class FocalLoss(nn.Module):
         elif self.reduction == 'sum':
             return focal_loss.sum()
         return focal_loss
+    
+def custom_collate(batch):
+    """Custom collate function to handle different-sized images"""
+    images = []
+    labels = []
+    
+    for image, label in batch:
+        images.append(image)
+        labels.append(label)
+    
+    # Stack labels normally since they're all the same size
+    labels = torch.stack(labels)
+    
+    # Don't stack images - keep them as a list
+    return images, labels
 
 def train_model(data_dir, num_epochs, batch_size, learning_rate):
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -263,8 +290,8 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
     train_dataset, val_dataset = torch.utils.data.random_split(feature_dataset, [train_size, val_size])
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=custom_collate)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=4, collate_fn=custom_collate)
 
     # Initialize model
     feature_dim = vae.config.latent_channels * 64
