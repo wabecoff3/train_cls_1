@@ -290,8 +290,8 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
     train_dataset, val_dataset = torch.utils.data.random_split(feature_dataset, [train_size, val_size])
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=custom_collate)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=4, collate_fn=custom_collate)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=4)
 
     # Initialize model
     feature_dim = vae.config.latent_channels * 64
