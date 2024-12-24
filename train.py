@@ -136,7 +136,7 @@ class TiledFeatureClassifier(nn.Module):
         
         return final_logits
 
-def tile_image(images, tile_size=(64, 64), max_tiles=40):
+def tile_image(images, tile_size=(64, 64), max_tiles=60):
     if len(images.shape) == 3:
         images = images.unsqueeze(0)
     
@@ -325,7 +325,7 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
     best_val_acc = 0
     for epoch in range(num_epochs):
         # Regenerate training features every 100 epochs
-        if (epoch + 1) % 100 == 0:
+        if (epoch) % 100 == 0:
             print(f"Epoch {epoch}: Regenerating training features...")
             train_features, train_labels = extract_and_cache_features(
                 train_dataset, vae, batch_size=batch_size, device=device, force_regenerate=True, split='train'
