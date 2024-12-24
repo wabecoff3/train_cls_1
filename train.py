@@ -15,7 +15,7 @@ path_to_core = "/home/wis/training/train_cls_1"
 data_dir = "dataset"
 batch_print_freq = 10
 num_epochs = 5000
-batch_size = 16
+batch_size = 24
 learning_rate = 2e-5
 feature_cache_dir = Path(f"{path_to_core}/feature_cache")
 
@@ -49,8 +49,8 @@ class ImageDataset(Dataset):
         img_path = self.images[idx]
         image = Image.open(img_path).convert('RGB')
         
-        if self.training and (random.random() > 0.4):
-            scale_factor = np.random.uniform(0.7, 1.2)
+        if self.training:
+            scale_factor = np.random.uniform(0.5, 1.3)
             new_width = int(image.size[0] * scale_factor)
             new_height = int(image.size[1] * scale_factor)
             image = image.resize((new_width, new_height), Image.BILINEAR)
@@ -84,15 +84,18 @@ class FeatureDataset(Dataset):
 class TiledFeatureClassifier(nn.Module):
     def __init__(self, feature_dim, num_classes=7, num_heads=4, class_names=None):
         super().__init__()
+        self.input_dropout = nn.Dropout(0.25)
         self.feature_dim = feature_dim
         self.bn1 = nn.LayerNorm(self.feature_dim)
         
         n_additional = self.feature_dim // 2
         self.learned_features = nn.Sequential(
             nn.Linear(self.feature_dim, n_additional),
+            nn.Dropout(0.25),
             nn.GELU(),
             nn.LayerNorm(n_additional),
             nn.Linear(n_additional, n_additional),
+            nn.Dropout(0.25),
             nn.GELU(),
             nn.LayerNorm(n_additional)
         )
@@ -110,6 +113,7 @@ class TiledFeatureClassifier(nn.Module):
     def forward(self, features):
         B, N, D = features.shape
         features = features.view(B * N, D)
+        features = self.input_dropout(features)
         features = self.bn1(features)
         learned_features = self.learned_features(features)
         features = torch.cat([features, learned_features], dim=1)
