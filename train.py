@@ -14,8 +14,8 @@ import numpy as np
 path_to_core = "/home/wis/training/train_cls_1"
 data_dir = "dataset"
 batch_print_freq = 10
-num_epochs = 1000
-batch_size = 32
+num_epochs = 5000
+batch_size = 64
 learning_rate = 2e-5
 feature_cache_dir = Path(f"{path_to_core}/feature_cache")
 
@@ -309,7 +309,7 @@ def train_model(data_dir, num_epochs, batch_size, learning_rate):
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=learning_rate,
-        weight_decay=1e-7,
+        weight_decay=3e-5,
         betas=(0.9, 0.999),
         eps=1e-8,
     )
