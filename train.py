@@ -56,7 +56,7 @@ class ImageDataset(Dataset):
             image = image.resize((new_width, new_height), Image.BILINEAR)
         
         image = self.transform(image)
-        label = self.labels[idx]
+        label = torch.tensor(self.labels[idx])
         return image, label
 
     def calculate_class_weights(self):
